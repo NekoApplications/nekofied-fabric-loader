@@ -189,7 +189,7 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 		if (frozen) throw new IllegalStateException("Frozen - cannot load additional mods!");
 
 		try {
-			setup();
+			setup(isDevelopmentEnvironment(), false);
 		} catch (ModResolutionException exception) {
 			if (exception.getCause() == null) {
 				throw FormattedException.ofLocalized("exception.incompatible", exception.getMessage());
@@ -199,8 +199,29 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 		}
 	}
 
-	private void setup() throws ModResolutionException {
-		boolean remapRegularMods = isDevelopmentEnvironment();
+	public void unfreeze(){
+		frozen = false;
+	}
+
+	public void reload(){
+		if (provider == null) throw new IllegalStateException("game provider not set");
+		if (frozen) throw new IllegalStateException("Frozen - cannot load additional mods!");
+
+		try {
+			//todo: remap mods on reload
+			setup(false, true);
+			freeze();
+		} catch (ModResolutionException exception) {
+			if (exception.getCause() == null) {
+				throw FormattedException.ofLocalized("exception.incompatible", exception.getMessage());
+			} else {
+				throw FormattedException.ofLocalized("exception.incompatible", exception);
+			}
+		}
+	}
+
+	private void setup(boolean remapRegularMods, boolean isReload) throws ModResolutionException {
+//		boolean remapRegularMods = isDevelopmentEnvironment();
 		VersionOverrides versionOverrides = new VersionOverrides();
 		DependencyOverrides depOverrides = new DependencyOverrides(configDir);
 
@@ -212,7 +233,7 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 		discoverer.addCandidateFinder(new ArgumentModCandidateFinder(remapRegularMods));
 
 		Map<String, Set<ModCandidate>> envDisabledMods = new HashMap<>();
-		modCandidates = discoverer.discoverMods(this, envDisabledMods);
+		modCandidates = discoverer.discoverMods(this, envDisabledMods, isReload);
 
 		// dump version and dependency overrides info
 
@@ -224,8 +245,8 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 			Log.info(LogCategory.GENERAL, "Dependencies overridden for %s", String.join(", ", depOverrides.getAffectedModIds()));
 		}
 
-		// resolve mods
 
+		// resolve mods
 		modCandidates = ModResolver.resolve(modCandidates, getEnvironmentType(), envDisabledMods);
 
 		dumpModList(modCandidates);
@@ -279,7 +300,7 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 			addMod(mod);
 		}
 
-		modCandidates = null;
+//		modCandidates = null;
 	}
 
 	private void dumpModList(List<ModCandidate> mods) {
@@ -460,6 +481,7 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 	}
 
 	private void setupLanguageAdapters() {
+		adapterMap.clear();
 		adapterMap.put("default", DefaultLanguageAdapter.INSTANCE);
 
 		for (ModContainerImpl mod : mods) {

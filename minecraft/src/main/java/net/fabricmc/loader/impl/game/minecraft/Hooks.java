@@ -30,7 +30,7 @@ public final class Hooks {
 
 	public static String appletMainClass;
 
-	public static final String FABRIC = "fabric";
+	public static final String FABRIC = "nekofied-fabric";
 	public static final String VANILLA = "vanilla";
 
 	public static String insertBranding(final String brand) {

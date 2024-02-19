@@ -83,7 +83,7 @@ public final class ModDiscoverer {
 		candidateFinders.add(f);
 	}
 
-	public List<ModCandidate> discoverMods(FabricLoaderImpl loader, Map<String, Set<ModCandidate>> envDisabledModsOut) throws ModResolutionException {
+	public List<ModCandidate> discoverMods(FabricLoaderImpl loader, Map<String, Set<ModCandidate>> envDisabledModsOut, boolean isReload) throws ModResolutionException {
 		long startTime = System.nanoTime();
 		ForkJoinPool pool = new ForkJoinPool();
 		Set<Path> processedPaths = new HashSet<>(); // suppresses duplicate paths
@@ -202,6 +202,17 @@ public final class ModDiscoverer {
 			}
 		}
 
+		// add fabric loader "mod"
+		if (isReload) {
+			if (candidates.stream().noneMatch(it -> it.getId().contains("fabric") && it.getId().contains("loader"))) {
+				ModMetadata metadata = new BuiltinModMetadata.Builder(FabricLoaderImpl.MOD_ID, FabricLoaderImpl.VERSION)
+						.setName("Fabric Loader")
+						.build();
+				BuiltinMod builtinMod = new BuiltinMod(Collections.singletonList(Paths.get(System.getProperty("java.home"))), metadata);
+				candidates.add(ModCandidate.createBuiltin(builtinMod, versionOverrides, depOverrides));
+			}
+		}
+
 		long endTime = System.nanoTime();
 
 		Log.debug(LogCategory.DISCOVERY, "Mod discovery time: %.1f ms", (endTime - startTime) * 1e-6);
@@ -248,7 +259,7 @@ public final class ModDiscoverer {
 		}
 
 		private ModScanTask(List<Path> paths, String localPath, RewindableInputStream is, long hash,
-				boolean requiresRemap, List<String> parentPaths) {
+							boolean requiresRemap, List<String> parentPaths) {
 			this.paths = paths;
 			this.localPath = localPath != null ? localPath : paths.get(0).toString();
 			this.is = is;
@@ -501,6 +512,7 @@ public final class ModDiscoverer {
 
 	private interface ZipEntrySource {
 		ZipEntry getNextEntry() throws IOException;
+
 		RewindableInputStream getInputStream() throws IOException;
 	}
 

@@ -272,7 +272,7 @@ public class MinecraftGameProvider implements GameProvider {
 				versionType = argMap.get("versionType") + "/";
 			}
 
-			argMap.put("versionType", versionType + "Fabric");
+			argMap.put("versionType", versionType + "Nekofied Fabric");
 
 			if (!argMap.containsKey("gameDir")) {
 				argMap.put("gameDir", getLaunchDirectory(argMap).toAbsolutePath().normalize().toString());
