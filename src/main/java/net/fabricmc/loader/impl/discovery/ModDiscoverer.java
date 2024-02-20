@@ -204,14 +204,22 @@ public final class ModDiscoverer {
 
 		// add fabric loader "mod"
 		if (isReload) {
-			if (candidates.stream().noneMatch(it -> it.getId().contains("fabric") && it.getId().contains("loader"))) {
+			if (ret.stream().noneMatch(it -> it.getId().contains("fabric") && it.getId().contains("loader"))) {
 				ModMetadata metadata = new BuiltinModMetadata.Builder(FabricLoaderImpl.MOD_ID, FabricLoaderImpl.VERSION)
 						.setName("Fabric Loader")
 						.build();
-				BuiltinMod builtinMod = new BuiltinMod(Collections.singletonList(Paths.get(System.getProperty("java.home"))), metadata);
-				candidates.add(ModCandidate.createBuiltin(builtinMod, versionOverrides, depOverrides));
+				BuiltinMod builtinMod = new BuiltinMod(Collections.emptyList(), metadata);
+				ret.add(ModCandidate.createBuiltin(builtinMod, versionOverrides, depOverrides));
 			}
 		}
+
+		//add nekofied-fabric-loader as dep
+		ModMetadata metadata = new BuiltinModMetadata.Builder("nekofied-fabric-loader", FabricLoaderImpl.VERSION)
+				.setName("Nekofied Fabric Loader")
+				.build();
+		BuiltinMod builtinMod = new BuiltinMod(Collections.emptyList(), metadata);
+		ret.add(ModCandidate.createBuiltin(builtinMod, versionOverrides, depOverrides));
+
 
 		long endTime = System.nanoTime();
 

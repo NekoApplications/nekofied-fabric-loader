@@ -35,6 +35,8 @@ import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import net.fabricmc.loader.impl.launch.knot.KnotClassLoader;
+
 import org.objectweb.asm.Opcodes;
 
 import net.fabricmc.accesswidener.AccessWidener;
@@ -93,6 +95,7 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 	private final ObjectShare objectShare = new ObjectShareImpl();
 
 	private boolean frozen = false;
+	private boolean reloadable = false;
 
 	private Object gameInstance;
 
@@ -206,19 +209,25 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 	public void reload(){
 		if (provider == null) throw new IllegalStateException("game provider not set");
 		if (frozen) throw new IllegalStateException("Frozen - cannot load additional mods!");
-
+		if (!reloadable)throw new IllegalStateException("Reloading feature is unavailable.");
 		try {
 			//todo: remap mods on reload
 			setup(false, true);
 			freeze();
+			if (getClass().getClassLoader() instanceof KnotClassLoader){
+				KnotClassLoader cl = (KnotClassLoader) getClass().getClassLoader();
+				cl.getDelegate().reloadAllDelegatedClass(true);
+			}
 		} catch (ModResolutionException exception) {
 			if (exception.getCause() == null) {
 				throw FormattedException.ofLocalized("exception.incompatible", exception.getMessage());
 			} else {
 				throw FormattedException.ofLocalized("exception.incompatible", exception);
 			}
-		}
-	}
+		} catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
 	private void setup(boolean remapRegularMods, boolean isReload) throws ModResolutionException {
 //		boolean remapRegularMods = isDevelopmentEnvironment();
@@ -615,6 +624,10 @@ public final class FabricLoaderImpl extends net.fabricmc.loader.FabricLoader {
 	@Override
 	public String[] getLaunchArguments(boolean sanitize) {
 		return getGameProvider().getLaunchArguments(sanitize);
+	}
+
+	public void setReloadable(boolean reloadable) {
+		this.reloadable = reloadable;
 	}
 
 	@Override

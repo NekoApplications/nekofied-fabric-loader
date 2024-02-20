@@ -41,6 +41,7 @@ import net.fabricmc.loader.api.entrypoint.PreLaunchEntrypoint;
 import net.fabricmc.loader.impl.FabricLoaderImpl;
 import net.fabricmc.loader.impl.FormattedException;
 import net.fabricmc.loader.impl.game.GameProvider;
+import net.fabricmc.loader.impl.instrument.ClassRedefineDelegateImpl;
 import net.fabricmc.loader.impl.launch.FabricLauncherBase;
 import net.fabricmc.loader.impl.launch.FabricMixinBootstrap;
 import net.fabricmc.loader.impl.util.LoaderUtil;
@@ -90,14 +91,14 @@ public final class Knot extends FabricLauncherBase {
 			if (side == null) throw new RuntimeException("Please specify side or use a dedicated Knot!");
 
 			switch (side.toLowerCase(Locale.ROOT)) {
-			case "client":
-				envType = EnvType.CLIENT;
-				break;
-			case "server":
-				envType = EnvType.SERVER;
-				break;
-			default:
-				throw new RuntimeException("Invalid side provided: must be \"client\" or \"server\"!");
+				case "client":
+					envType = EnvType.CLIENT;
+					break;
+				case "server":
+					envType = EnvType.SERVER;
+					break;
+				default:
+					throw new RuntimeException("Invalid side provided: must be \"client\" or \"server\"!");
 			}
 		}
 
@@ -124,8 +125,10 @@ public final class Knot extends FabricLauncherBase {
 			classPath.add(LoaderUtil.normalizeExistingPath(path));
 		}
 
-		if (unsupported != null) Log.warn(LogCategory.KNOT, "Knot does not support wildcard class path entries: %s - the game may not load properly!", String.join(", ", unsupported));
-		if (missing != null) Log.warn(LogCategory.KNOT, "Class path entries reference missing files: %s - the game may not load properly!", String.join(", ", missing));
+		if (unsupported != null)
+			Log.warn(LogCategory.KNOT, "Knot does not support wildcard class path entries: %s - the game may not load properly!", String.join(", ", unsupported));
+		if (missing != null)
+			Log.warn(LogCategory.KNOT, "Class path entries reference missing files: %s - the game may not load properly!", String.join(", ", missing));
 
 		provider = createGameProvider(args);
 		Log.finishBuiltinConfig();
@@ -136,13 +139,24 @@ public final class Knot extends FabricLauncherBase {
 		boolean useCompatibility = provider.requiresUrlClassLoader() || Boolean.parseBoolean(System.getProperty("fabric.loader.useCompatibilityClassLoader", "false"));
 		classLoader = KnotClassLoaderInterface.create(useCompatibility, isDevelopment(), envType, provider);
 		ClassLoader cl = classLoader.getClassLoader();
-
+		boolean reloadable = true;
+		try {
+			if (cl instanceof KnotClassLoader) {
+				((KnotClassLoader) cl).setClassRedefineDelegate(ClassRedefineDelegateImpl.attatchDelegate((KnotClassLoader) cl));
+			} else if (cl instanceof KnotCompatibilityClassLoader) {
+				((KnotCompatibilityClassLoader) cl).setClassRedefineDelegate(ClassRedefineDelegateImpl.attatchDelegate((KnotCompatibilityClassLoader) cl));
+			}
+		} catch (Exception e) {
+			Log.warn(LogCategory.KNOT, "Failed to set ClassRedefineDelegate, class reloading feature might unavailable.", e);
+			reloadable = false;
+		}
 		provider.initialize(this);
 
 		Thread.currentThread().setContextClassLoader(cl);
 
 		FabricLoaderImpl loader = FabricLoaderImpl.INSTANCE;
 		loader.setGameProvider(provider);
+		loader.setReloadable(reloadable);
 		loader.load();
 		loader.freeze();
 
@@ -181,7 +195,8 @@ public final class Knot extends FabricLauncherBase {
 		List<GameProvider> failedProviders = new ArrayList<>();
 
 		for (GameProvider provider : ServiceLoader.load(GameProvider.class)) {
-			if (!provider.isEnabled()) continue; // don't attempt disabled providers and don't include them in the error report
+			if (!provider.isEnabled())
+				continue; // don't attempt disabled providers and don't include them in the error report
 
 			if (provider != embeddedGameProvider // don't retry already failed provider
 					&& provider.locateGame(this, args)) {
@@ -199,8 +214,8 @@ public final class Knot extends FabricLauncherBase {
 			msg = "No game providers present on the class path!";
 		} else if (failedProviders.size() == 1) {
 			msg = String.format("%s game provider couldn't locate the game! "
-					+ "The game may be absent from the class path, lacks some expected files, suffers from jar "
-					+ "corruption or is of an unsupported variety/version.",
+							+ "The game may be absent from the class path, lacks some expected files, suffers from jar "
+							+ "corruption or is of an unsupported variety/version.",
 					failedProviders.get(0).getGameName());
 		} else {
 			msg = String.format("None of the game providers (%s) were able to locate their game!",

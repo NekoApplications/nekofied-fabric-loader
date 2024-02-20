@@ -4,6 +4,8 @@ nekofied-fabric-loader is a fork of [fabric-loader](https://github.com/FabricMC/
 
 nekofied-fabric-loader is designed to be completely compatible with original fabric-loader
 
+nekofied-fabric-loader only supports jvm version > 11
+
 The loader for mods under Fabric. It provides mod loading facilities and useful abstractions for other mods to use.
 
 ## License

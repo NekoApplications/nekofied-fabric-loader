@@ -21,6 +21,7 @@ import java.net.URLClassLoader;
 import java.security.CodeSource;
 
 import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.instrument.ClassRedefineDelegate;
 import net.fabricmc.loader.impl.game.GameProvider;
 import net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.ClassLoaderAccess;
 
@@ -31,6 +32,8 @@ class KnotCompatibilityClassLoader extends URLClassLoader implements ClassLoader
 		super(new URL[0], KnotCompatibilityClassLoader.class.getClassLoader());
 		this.delegate = new KnotClassDelegate<>(isDevelopment, envType, this, getParent(), provider);
 	}
+
+	private ClassRedefineDelegate<KnotCompatibilityClassLoader> classRedefineDelegate;
 
 	KnotClassDelegate<?> getDelegate() {
 		return delegate;
@@ -83,8 +86,23 @@ class KnotCompatibilityClassLoader extends URLClassLoader implements ClassLoader
 	}
 
 	@Override
+	public void redefineClassFwd(String name, byte[] b, int off, int len, CodeSource cs) {
+		if (classRedefineDelegate != null){
+			classRedefineDelegate.redefineClass(name, b, off, len, cs);
+			return;
+		}
+		throw new RuntimeException("Require ClassRedefineDelegate to redefine class!");
+	}
+
+
+	@Override
 	public void resolveClassFwd(Class<?> cls) {
 		super.resolveClass(cls);
+	}
+
+
+	public void setClassRedefineDelegate(ClassRedefineDelegate<KnotCompatibilityClassLoader> classRedefineDelegate) {
+		this.classRedefineDelegate = classRedefineDelegate;
 	}
 
 	static {

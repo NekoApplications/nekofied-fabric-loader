@@ -29,9 +29,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.CodeSource;
 import java.security.cert.Certificate;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,7 +56,7 @@ import net.fabricmc.loader.impl.util.UrlUtil;
 import net.fabricmc.loader.impl.util.log.Log;
 import net.fabricmc.loader.impl.util.log.LogCategory;
 
-final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> implements KnotClassLoaderInterface {
+public final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> implements KnotClassLoaderInterface {
 	private static final boolean LOG_CLASS_LOAD = System.getProperty(SystemProperties.DEBUG_LOG_CLASS_LOAD) != null;
 	private static final boolean LOG_CLASS_LOAD_ERRORS = LOG_CLASS_LOAD || System.getProperty(SystemProperties.DEBUG_LOG_CLASS_LOAD_ERRORS) != null;
 	private static final boolean LOG_TRANSFORM_ERRORS = System.getProperty(SystemProperties.DEBUG_LOG_TRANSFORM_ERRORS) != null;
@@ -86,6 +88,8 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 	private volatile Set<Path> validParentCodeSources = Collections.emptySet();
 	private final Map<Path, String[]> allowedPrefixes = new ConcurrentHashMap<>();
 	private final Set<String> parentSourcedClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+	private final Set<String> delegatedClass = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
 	KnotClassDelegate(boolean isDevelopment, EnvType envType, T classLoader, ClassLoader parentClassLoader, GameProvider provider) {
 		this.isDevelopment = isDevelopment;
@@ -195,7 +199,7 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 				c = tryLoadClass(name, true);
 
 				if (c == null) {
-					throw new ClassNotFoundException("can't find class "+name);
+					throw new ClassNotFoundException("can't find class " + name);
 				} else if (LOG_CLASS_LOAD) {
 					Log.info(LogCategory.KNOT, "loaded class %s into target", name);
 				}
@@ -206,6 +210,67 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 			return c;
 		}
 	}
+
+	void checkPrefixRestrictions(String name) throws ClassNotFoundException {
+		if (!allowedPrefixes.isEmpty() && !DISABLE_ISOLATION) { // check prefix restrictions (allows exposing libraries partially during startup)
+			String fileName = LoaderUtil.getClassFileName(name);
+			URL url = classLoader.getResource(fileName);
+
+			if (url != null && hasRegularCodeSource(url)) {
+				Path codeSource = getCodeSource(url, fileName);
+				String[] prefixes = allowedPrefixes.get(codeSource);
+
+				if (prefixes != null) {
+					assert prefixes.length > 0;
+					boolean found = false;
+
+					for (String prefix : prefixes) {
+						if (name.startsWith(prefix)) {
+							found = true;
+							break;
+						}
+					}
+
+					if (!found) {
+						String msg = "class " + name + " is currently restricted from being loaded";
+						if (LOG_CLASS_LOAD_ERRORS) Log.warn(LogCategory.KNOT, msg);
+						throw new ClassNotFoundException(msg);
+					}
+				}
+			}
+		}
+	}
+
+	public boolean reloadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
+		if (!delegatedClass.contains(name)) throw new ClassNotFoundException("Class " + name + "is not delegated from this KnotClassDelegate");
+		synchronized (classLoader.getClassLoadingLockFwd(name)) {
+			if (name.startsWith("java.")) {
+				return false;
+			}
+			checkPrefixRestrictions(name);
+			allowFromParent = propagateLoadIntoTarget(name, allowFromParent);
+
+			byte[] input = getPostMixinClassByteArray(name, allowFromParent);
+			if (input == null)
+				return false;
+			Metadata metadata = getMetadata(name);
+			classLoader.redefineClassFwd(name, input, 0, input.length, metadata.codeSource);
+		}
+		return true;
+	}
+
+	public void reloadAllDelegatedClass(boolean allowFromParent) throws ClassNotFoundException {
+		synchronized (delegatedClass) {
+			List<String> removedClass = new ArrayList<>();
+			for (String s : delegatedClass) {
+				if (!reloadClass(s, allowFromParent)) {
+					removedClass.add(s);
+				}
+			}
+			removedClass.forEach(delegatedClass::remove);
+		}
+	}
+
 
 	Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
 		synchronized (classLoader.getClassLoadingLockFwd(name)) {
@@ -234,12 +299,13 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 							// loaded by setting validParentUrls and not including "url". Typical causes are:
 							// - accessing classes too early (game libs shouldn't be used until Loader is ready)
 							// - using jars that are only transient (deobfuscation input or pass-through installers)
-							String msg = String.format("can't load class %s at %s as it hasn't been exposed to the game (yet? The system property "+SystemProperties.PATH_GROUPS+" may not be set correctly in-dev)",
+							String msg = String.format("can't load class %s at %s as it hasn't been exposed to the game (yet? The system property " + SystemProperties.PATH_GROUPS + " may not be set correctly in-dev)",
 									name, getCodeSource(url, fileName));
 							if (LOG_CLASS_LOAD_ERRORS) Log.warn(LogCategory.KNOT, msg);
 							throw new ClassNotFoundException(msg);
 						} else { // load from system cl
-							if (LOG_CLASS_LOAD) Log.info(LogCategory.KNOT, "loading class %s using the parent class loader", name);
+							if (LOG_CLASS_LOAD)
+								Log.info(LogCategory.KNOT, "loading class %s using the parent class loader", name);
 							c = parentClassLoader.loadClass(name);
 						}
 					} else if (LOG_CLASS_LOAD) {
@@ -276,49 +342,27 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 		}
 	}
 
-	Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
-		if (name.startsWith("java.")) {
-			return null;
-		}
-
-		if (!allowedPrefixes.isEmpty() && !DISABLE_ISOLATION) { // check prefix restrictions (allows exposing libraries partially during startup)
-			String fileName = LoaderUtil.getClassFileName(name);
-			URL url = classLoader.getResource(fileName);
-
-			if (url != null && hasRegularCodeSource(url)) {
-				Path codeSource = getCodeSource(url, fileName);
-				String[] prefixes = allowedPrefixes.get(codeSource);
-
-				if (prefixes != null) {
-					assert prefixes.length > 0;
-					boolean found = false;
-
-					for (String prefix : prefixes) {
-						if (name.startsWith(prefix)) {
-							found = true;
-							break;
-						}
-					}
-
-					if (!found) {
-						String msg = "class "+name+" is currently restricted from being loaded";
-						if (LOG_CLASS_LOAD_ERRORS) Log.warn(LogCategory.KNOT, msg);
-						throw new ClassNotFoundException(msg);
-					}
-				}
-			}
-		}
-
+	boolean propagateLoadIntoTarget(String name, boolean allowFromParent) {
 		if (!allowFromParent && !parentSourcedClasses.isEmpty()) { // propagate loadIntoTarget behavior to its nested classes
 			int pos = name.length();
 
 			while ((pos = name.lastIndexOf('$', pos - 1)) > 0) {
 				if (parentSourcedClasses.contains(name.substring(0, pos))) {
-					allowFromParent = true;
-					break;
+					return true;
 				}
 			}
 		}
+		return allowFromParent;
+	}
+
+	Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
+		if (name.startsWith("java.")) {
+			return null;
+		}
+
+		checkPrefixRestrictions(name);
+		allowFromParent = propagateLoadIntoTarget(name, allowFromParent);
+
 
 		byte[] input = getPostMixinClassByteArray(name, allowFromParent);
 		if (input == null) return null;
@@ -351,7 +395,7 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 				}
 			}
 		}
-
+		delegatedClass.add(name);
 		return classLoader.defineClassFwd(name, input, 0, input.length, metadata.codeSource);
 	}
 
@@ -486,7 +530,8 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 			url = parentClassLoader.getResource(name);
 
 			if (!isValidParentUrl(url, name)) {
-				if (LOG_CLASS_LOAD) Log.info(LogCategory.KNOT, "refusing to load class %s at %s from parent class loader", name, getCodeSource(url, name));
+				if (LOG_CLASS_LOAD)
+					Log.info(LogCategory.KNOT, "refusing to load class %s at %s from parent class loader", name, getCodeSource(url, name));
 
 				return null;
 			}
@@ -522,22 +567,34 @@ final class KnotClassDelegate<T extends ClassLoader & ClassLoaderAccess> impleme
 		try {
 			return (ClassLoader) ClassLoader.class.getMethod("getPlatformClassLoader").invoke(null); // Java 9+ only
 		} catch (NoSuchMethodException e) {
-			return new ClassLoader(null) { }; // fall back to boot cl
+			return new ClassLoader(null) {
+			}; // fall back to boot cl
 		} catch (ReflectiveOperationException e) {
 			throw new RuntimeException(e);
 		}
 	}
 
-	interface ClassLoaderAccess {
+	public Set<String> getDelegatedClass() {
+		return delegatedClass;
+	}
+
+	public interface ClassLoaderAccess {
 		void addUrlFwd(URL url);
+
 		URL findResourceFwd(String name);
 
 		Package getPackageFwd(String name);
+
 		Package definePackageFwd(String name, String specTitle, String specVersion, String specVendor, String implTitle, String implVersion, String implVendor, URL sealBase) throws IllegalArgumentException;
 
 		Object getClassLoadingLockFwd(String name);
+
 		Class<?> findLoadedClassFwd(String name);
+
 		Class<?> defineClassFwd(String name, byte[] b, int off, int len, CodeSource cs);
+
+		void redefineClassFwd(String name, byte[] b, int off, int len, CodeSource cs);
+
 		void resolveClassFwd(Class<?> cls);
 	}
 }

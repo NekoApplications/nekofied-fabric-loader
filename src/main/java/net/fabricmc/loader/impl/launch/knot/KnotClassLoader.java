@@ -26,11 +26,12 @@ import java.util.Enumeration;
 import java.util.Objects;
 
 import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.instrument.ClassRedefineDelegate;
 import net.fabricmc.loader.impl.game.GameProvider;
 import net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.ClassLoaderAccess;
 
 // class name referenced by string constant in net.fabricmc.loader.impl.util.LoaderUtil.verifyNotInTargetCl
-final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAccess {
+public final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAccess {
 	private static final class DynamicURLClassLoader extends URLClassLoader {
 		private DynamicURLClassLoader(URL[] urls) {
 			super(urls, new DummyClassLoader());
@@ -49,6 +50,7 @@ final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAcce
 	private final DynamicURLClassLoader urlLoader;
 	private final ClassLoader originalLoader;
 	private final KnotClassDelegate<KnotClassLoader> delegate;
+	private ClassRedefineDelegate<KnotClassLoader> classRedefineDelegate;
 
 	KnotClassLoader(boolean isDevelopment, EnvType envType, GameProvider provider) {
 		super(new DynamicURLClassLoader(new URL[0]));
@@ -57,7 +59,7 @@ final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAcce
 		this.delegate = new KnotClassDelegate<>(isDevelopment, envType, this, originalLoader, provider);
 	}
 
-	KnotClassDelegate<?> getDelegate() {
+	public KnotClassDelegate<?> getDelegate() {
 		return delegate;
 	}
 
@@ -141,7 +143,7 @@ final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAcce
 
 	@Override
 	public Package definePackageFwd(String name, String specTitle, String specVersion, String specVendor,
-			String implTitle, String implVersion, String implVendor, URL sealBase) throws IllegalArgumentException {
+									String implTitle, String implVersion, String implVendor, URL sealBase) throws IllegalArgumentException {
 		return super.definePackage(name, specTitle, specVersion, specVendor, implTitle, implVersion, implVendor, sealBase);
 	}
 
@@ -161,6 +163,14 @@ final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAcce
 	}
 
 	@Override
+	public void redefineClassFwd(String name, byte[] b, int off, int len, CodeSource cs) {
+		if (classRedefineDelegate == null) {
+			throw new RuntimeException("Require ClassRedefineDelegate to redefine class!");
+		}
+		classRedefineDelegate.redefineClass(name, b, off, len, cs);
+	}
+
+	@Override
 	public void resolveClassFwd(Class<?> cls) {
 		super.resolveClass(cls);
 	}
@@ -168,4 +178,9 @@ final class KnotClassLoader extends SecureClassLoader implements ClassLoaderAcce
 	static {
 		registerAsParallelCapable();
 	}
+
+	public void setClassRedefineDelegate(ClassRedefineDelegate<KnotClassLoader> classRedefineDelegate) {
+		this.classRedefineDelegate = classRedefineDelegate;
+	}
+
 }
